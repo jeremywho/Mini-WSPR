@@ -6,6 +6,7 @@
 #include "wspr_sched.h"
 #include "wspr_time.h"
 #include "wspr_band.h"
+#include "wspr_beacon.h"
 
 static int g_fail = 0;
 #define CHECK(cond, msg) do { \
@@ -135,6 +136,37 @@ static void test_band(void) {
     CHECK(hi + (4-1)*sp <= 1600.0 + 1e-9, "highest FSK tone kept inside window");
 }
 
+// --- wspr_beacon ----------------------------------------------------------
+static void test_beacon(void) {
+    wspr_cfg_t cfg; memset(&cfg, 0, sizeof cfg);
+    strcpy(cfg.callsign, "K1ABC"); cfg.power_dbm = 37; cfg.band = "20m";
+    cfg.duty.period = 1; cfg.duty.phase = 0; cfg.base_hz_desired = 1500;
+    wspr_plan_t out;
+    int64_t e30, e159;
+    wspr_gps_to_epoch_ms("2026-06-14","12:00:30",&e30);
+    wspr_gps_to_epoch_ms("2026-06-14","12:01:59",&e159);
+
+    wspr_fix_src_t stale = { true, 1000, e30, true };
+    CHECK(wspr_beacon_decide(&cfg,&stale,"FN42", 999999, 10000, 2000, &out)==WSPR_HOLD, "stale->HOLD");
+
+    wspr_fix_src_t s30 = { true, 1000, e30, true };
+    CHECK(wspr_beacon_decide(&cfg,&s30,"FN42", 1000, 10000, 2000, &out)==WSPR_WAIT, "mid-slot->WAIT");
+    CHECK(out.anchor_ms > e30, "wait anchor in future");
+
+    wspr_fix_src_t s159 = { true, 1000, e159, true };
+    CHECK(wspr_beacon_decide(&cfg,&s159,"FN42", 1000, 10000, 3000, &out)==WSPR_TX, "near anchor->TX");
+    CHECK(out.dial_hz==14095600LL, "TX dial 20m");
+    CHECK(out.base_hz>=1400 && out.base_hz<=1600, "TX base in window");
+    CHECK(out.symbols[0]<=3 && out.symbols[161]<=3, "TX symbols valid");
+
+    strcpy(cfg.grid_override,"IO90");
+    wspr_beacon_decide(&cfg,&s159,"FN42",1000,10000,3000,&out);
+    CHECK(strcmp(out.grid,"IO90")==0, "grid override used");
+
+    cfg.band="99m";
+    CHECK(wspr_beacon_decide(&cfg,&s159,"FN42",1000,10000,3000,&out)==WSPR_HOLD, "bad band->HOLD");
+}
+
 int main(void) {
     test_tx_synth_ft8_parity();
     test_tx_synth_totals_and_stuff();
@@ -142,6 +174,7 @@ int main(void) {
     test_sched();
     test_time();
     test_band();
+    test_beacon();
     if (g_fail == 0) printf("ALL TESTS PASSED\n");
     else printf("%d CHECK(S) FAILED\n", g_fail);
     return g_fail ? 1 : 0;
