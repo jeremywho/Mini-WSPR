@@ -1112,6 +1112,7 @@ esp_err_t trusdx_begin_tx_plan(const uint8_t* symbols, int count,
                                int base_hz, int64_t anchor_ms, int64_t now_ms)
 {
     if (!symbols || count <= 0 || count > TRUSDX_TX_MAX_SYMBOLS) return ESP_ERR_INVALID_ARG;
+    if (!(symbol_seconds > 0.0) || !(tone_spacing_hz > 0.0)) return ESP_ERR_INVALID_ARG;
     if (!trusdx_serial_is_ready()) return ESP_ERR_INVALID_STATE;
     if (s_tune_on || s_tx_active || s_tx_task_handle) return ESP_ERR_INVALID_STATE;
 
