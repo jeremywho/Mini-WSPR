@@ -7,6 +7,7 @@
 // and the verified wspr_beacon_decide() brain, and keeps the early-start bounded
 // within WSPR's start tolerance.
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,6 +28,17 @@ static const char* TAG = "wspr_app";
 // v1 config is compiled in; NVS + on-device editing is Plan 3 Task 5 (hardware).
 static wspr_cfg_t g_cfg;
 
+// Connect to the truSDX off the UI thread so a slow/absent rig never freezes the
+// display or GPS. Retries until ready, so plug order doesn't matter; once connected
+// trusdx_serial_start() is a no-op. The beacon loop gates TX on readiness.
+static void connect_task(void*) {
+    radio_control_set_backend(RADIO_CONTROL_TRUSDX_CAT);
+    for (;;) {
+        if (!trusdx_serial_is_ready()) trusdx_serial_start();
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
 static void beacon_task(void*) {
     auto m5cfg = M5.config();
     M5Cardputer.begin(m5cfg);
@@ -39,14 +51,13 @@ static void beacon_task(void*) {
     nvs_flash_init();
     gps_start(115200);
 
-    radio_control_set_backend(RADIO_CONTROL_TRUSDX_CAT);
-    trusdx_serial_start();
+    xTaskCreatePinnedToCore(connect_task, "wspr_connect", 4096, nullptr, 4, nullptr, 0);
 
-    std::snprintf(g_cfg.callsign, sizeof(g_cfg.callsign), "%s", "N0CALL");
+    std::snprintf(g_cfg.callsign, sizeof(g_cfg.callsign), "%s", "K7DYX");
     g_cfg.grid_override[0] = '\0';
     g_cfg.power_dbm = 33;            // ~2 W; honest power set on the rig
     g_cfg.band = "20m";
-    g_cfg.duty.period = 5;           // ~20% duty
+    g_cfg.duty.period = 1;           // BENCH: TX every even minute (set 5 for ~20% on-air)
     g_cfg.duty.phase = wspr_duty_phase_for_call(g_cfg.callsign, g_cfg.duty.period);
     g_cfg.base_hz_desired = 1500.0;
 
@@ -56,6 +67,7 @@ static void beacon_task(void*) {
     const int64_t PREKEY_LEAD_MS = 250;
     uint32_t tx_count = 0;
     int64_t  last_tx_anchor = -1;
+    int64_t  tx_started_mono = 0;   // PA-safety watchdog: when the current TX keyed (0 = idle)
 
     // RMC-specific monotonic anchor: gps.time_utc only changes on a valid RMC, so a
     // change marks a fresh RMC. Stamp esp_timer then (same clock as now_mono) and keep
@@ -101,18 +113,40 @@ static void beacon_task(void*) {
             }
         }
 
-        M5.Display.fillRect(0, 40, 240, 90, TFT_BLACK);
-        M5.Display.setCursor(0, 40);
-        M5.Display.printf("%s %s\n", g_cfg.callsign,
-                          src.have_grid ? gs.grid_square.c_str() : "----");
-        M5.Display.printf("%s  TX:%u\n", g_cfg.band, (unsigned)tx_count);
-        if (act == WSPR_HOLD) {
-            M5.Display.print("waiting GPS");
-        } else if (act == WSPR_WAIT) {
-            long secs = (long)((plan.anchor_ms - utc_now) / 1000);
-            M5.Display.printf("next TX %lds", secs);
+        // PA-safety watchdog: a WSPR frame is 110.6 s; if the rig stays keyed past ~118 s
+        // something stalled — force a key-off so a stuck TX can't sit on the air / cook the PA.
+        if (trusdx_serial_ft8_tx_active()) {
+            if (tx_started_mono == 0) tx_started_mono = now_mono;
+            else if (now_mono - tx_started_mono > 118000) {
+                trusdx_serial_cancel_ft8_tx();
+                ESP_LOGW(TAG, "TX watchdog: keyed >118s, forcing key-off");
+            }
         } else {
-            M5.Display.print("** TX **");
+            tx_started_mono = 0;
+        }
+
+        // Status, redrawn ONLY when it changes. Bg-colored text + fixed-width padding
+        // overwrite in place (no clear-to-black), so the display does not flicker.
+        char tmp[24], l1[24], l2[24], l3[24];
+        std::snprintf(tmp, sizeof tmp, "%s %s", g_cfg.callsign,
+                      src.have_grid ? gs.grid_square.c_str() : "----");
+        std::snprintf(l1, sizeof l1, "%-18s", tmp);
+        std::snprintf(tmp, sizeof tmp, "%s rig:%s TX:%u", g_cfg.band,
+                      trusdx_serial_is_ready() ? "OK" : "..", (unsigned)tx_count);
+        std::snprintf(l2, sizeof l2, "%-18s", tmp);
+        if (act == WSPR_HOLD)      std::snprintf(tmp, sizeof tmp, "waiting GPS");
+        else if (act == WSPR_WAIT) std::snprintf(tmp, sizeof tmp, "next TX %lds",
+                                                 (long)((plan.anchor_ms - utc_now) / 1000));
+        else                       std::snprintf(tmp, sizeof tmp, "** TX **");
+        std::snprintf(l3, sizeof l3, "%-18s", tmp);
+
+        static char p1[24] = {0}, p2[24] = {0}, p3[24] = {0};
+        if (std::strcmp(l1, p1) || std::strcmp(l2, p2) || std::strcmp(l3, p3)) {
+            M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+            M5.Display.setCursor(0, 40); M5.Display.print(l1);
+            M5.Display.setCursor(0, 62); M5.Display.print(l2);
+            M5.Display.setCursor(0, 84); M5.Display.print(l3);
+            std::strcpy(p1, l1); std::strcpy(p2, l2); std::strcpy(p3, l3);
         }
 
         vTaskDelay(pdMS_TO_TICKS(200));
