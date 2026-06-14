@@ -1,0 +1,5 @@
+# Build + scratch artifacts
+*.exe
+*.o
+*.wav
+build/
