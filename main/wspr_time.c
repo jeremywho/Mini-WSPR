@@ -16,6 +16,13 @@ static bool digits(const char* p, int n) {
     for (int i = 0; i < n; i++) if (!isdigit((unsigned char)p[i])) return false;
     return true;
 }
+static bool valid_dom(int y, int mo, int d) {
+    static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    if (mo < 1 || mo > 12 || d < 1) return false;
+    int max = dim[mo - 1];
+    if (mo == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) max = 29;  // leap February
+    return d <= max;
+}
 
 bool wspr_gps_to_epoch_ms(const char* date_ymd, const char* time_hms, int64_t* out_ms) {
     if (!date_ymd || !time_hms || !out_ms) return false;
@@ -25,7 +32,7 @@ bool wspr_gps_to_epoch_ms(const char* date_ymd, const char* time_hms, int64_t* o
     if (!digits(time_hms, 2) || !digits(time_hms + 3, 2) || !digits(time_hms + 6, 2)) return false;
     int y = atoi(date_ymd), mo = atoi(date_ymd + 5), d = atoi(date_ymd + 8);
     int h = atoi(time_hms), mi = atoi(time_hms + 3), s = atoi(time_hms + 6);
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 60) return false;
+    if (!valid_dom(y, mo, d) || h > 23 || mi > 59 || s > 60) return false;  // s==60 allows a leap second
     int64_t days = days_from_civil(y, mo, d);
     int64_t secs = days * 86400 + h * 3600 + mi * 60 + s;
     *out_ms = secs * 1000;

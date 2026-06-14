@@ -62,6 +62,23 @@ static void test_tx_synth_totals_and_stuff(void) {
     CHECK(tx_synth_done(&s), "synth done after draining");
 }
 
+static void test_tx_synth_chunked(void) {
+    uint8_t wsym[162]; for (int i = 0; i < 162; ++i) wsym[i] = (uint8_t)((i * 7) % 4);
+    tx_synth_plan_t wp = { wsym, 162, 8192.0/12000.0, 12000.0/8192.0, 1473.0, 11520, 88.0, true };
+    tx_synth_t s1; tx_synth_init(&s1, &wp, 0);
+    int64_t total = tx_synth_total_samples(&s1);
+    static uint8_t big[1300000];
+    int64_t got1 = 0;
+    for (;;) { int want = (int)(total - got1 > 65536 ? 65536 : total - got1);
+               int k = tx_synth_pull(&s1, big + got1, want); if (!k) break; got1 += k; }
+    tx_synth_t s2; tx_synth_init(&s2, &wp, 0);
+    int mism = 0; int64_t pos = 0; uint8_t c[64];
+    for (;;) { int k = tx_synth_pull(&s2, c, 64); if (!k) break;
+               for (int i = 0; i < k; ++i) if (pos + i < got1 && c[i] != big[pos + i]) mism = 1;
+               pos += k; }
+    CHECK(got1 == total && pos == total && !mism, "chunked 64B pulls == one-shot (state continuity)");
+}
+
 // --- wspr_sched -----------------------------------------------------------
 static void test_sched(void) {
     CHECK(wspr_even_minute_index(0) == 0, "min0 -> idx0");
@@ -75,6 +92,9 @@ static void test_sched(void) {
     CHECK(wspr_next_tx_anchor_ms(day - 5000, &d) >= day, "rolls into next day");
     int ph = wspr_duty_phase_for_call("K1ABC", 5);
     CHECK(ph >= 0 && ph < 5 && ph == wspr_duty_phase_for_call("K1ABC", 5), "call phase stable+in-range");
+    wspr_duty_t bad = { 5, 7 };   // phase 7 normalizes to 2 -> a slot must still exist (no infinite loop)
+    CHECK(wspr_is_tx_slot(2, &bad) && wspr_next_tx_anchor_ms(0, &bad) == 2*120000 + 1000,
+          "out-of-range duty phase normalized, no hang");
 }
 
 // --- wspr_time ------------------------------------------------------------
@@ -95,6 +115,10 @@ static void test_time(void) {
     CHECK(!wspr_fix_now(&src, 5000, 10000).usable, "no grid -> unusable");
     src.have_grid = true; src.have_valid_rmc = false;
     CHECK(!wspr_fix_now(&src, 5000, 10000).usable, "no valid RMC -> unusable");
+    CHECK(!wspr_gps_to_epoch_ms("2026-02-30","00:00:00",&ms), "reject Feb 30");
+    CHECK(!wspr_gps_to_epoch_ms("2026-04-31","00:00:00",&ms), "reject Apr 31");
+    CHECK( wspr_gps_to_epoch_ms("2024-02-29","00:00:00",&ms), "accept leap Feb 29 (2024)");
+    CHECK(!wspr_gps_to_epoch_ms("2026-02-29","00:00:00",&ms), "reject Feb 29 in non-leap 2026");
 }
 
 // --- wspr_band ------------------------------------------------------------
@@ -114,6 +138,7 @@ static void test_band(void) {
 int main(void) {
     test_tx_synth_ft8_parity();
     test_tx_synth_totals_and_stuff();
+    test_tx_synth_chunked();
     test_sched();
     test_time();
     test_band();

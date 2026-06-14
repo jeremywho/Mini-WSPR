@@ -6,8 +6,9 @@ int64_t wspr_even_minute_index(int64_t utc_ms) {
 }
 bool wspr_is_tx_slot(int64_t i, const wspr_duty_t* d) {
     if (!d || d->period <= 0) return true;
+    int phase = d->phase % d->period; if (phase < 0) phase += d->period;  // normalize -> a slot always exists
     int64_t m = i % d->period; if (m < 0) m += d->period;
-    return m == d->phase;
+    return m == (int64_t)phase;
 }
 int64_t wspr_next_tx_anchor_ms(int64_t from_ms, const wspr_duty_t* d) {
     // even-minute boundaries are at minute = 0,2,4,... -> ms = idx * 120000
