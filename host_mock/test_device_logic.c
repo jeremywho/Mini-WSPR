@@ -159,6 +159,10 @@ static void test_beacon(void) {
     CHECK(out.base_hz>=1400 && out.base_hz<=1600, "TX base in window");
     CHECK(out.symbols[0]<=3 && out.symbols[161]<=3, "TX symbols valid");
 
+    wspr_cfg_t bad; memset(&bad, 0, sizeof bad);
+    strcpy(bad.callsign,"ABCDEF"); bad.power_dbm=37; bad.band="20m"; bad.duty.period=1; bad.base_hz_desired=1500;
+    CHECK(wspr_beacon_decide(&bad,&s30,"FN42",1000,10000,2000,&out)==WSPR_HOLD, "unencodable call -> HOLD not WAIT");
+
     strcpy(cfg.grid_override,"IO90");
     wspr_beacon_decide(&cfg,&s159,"FN42",1000,10000,3000,&out);
     CHECK(strcmp(out.grid,"IO90")==0, "grid override used");

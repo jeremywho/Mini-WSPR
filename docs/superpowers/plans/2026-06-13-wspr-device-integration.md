@@ -161,11 +161,27 @@ mixed-EOL `idf_component.yml`.
 Refactor `audio_trusdx_serial.cpp`'s `tx_task` to drive `tx_synth` instead of the inline FT8 math.
 New entry `trusdx_begin_tx_plan(symbols, count, symbol_seconds, tone_spacing_hz, base_hz, anchor_ms)`.
 **Keep `trusdx_serial_begin_ft8_tx` working** (build a 79/0.160/6.25 plan internally) — the FT8 path
-must stay byte-identical (Plan 2's parity test is the spec). **WSPR timing (Codex):** pre-key
-(`UA1;TX0;`) BEFORE the anchor, then **wait until `anchor_ms`** before the first audio byte;
-compute `start_sample` from the actual time at first byte; if more than a small threshold late,
-abort the slot (`;RX;`) rather than partial-start. Keep `sent_samples`-driven pacing, the 100 ms
-drain + `;RX;`×3 key-off, and `0x3B->0x3A` stuffing outside the pure synth.
+must stay byte-identical (Plan 2's parity test is the spec).
+
+**WSPR keying/timing (Codex Part B — refined):**
+- Use a **fixed, bounded `TX_SETUP_LEAD_MS`** device constant (~1500 ms), NOT the scheduler's
+  `prekey_lead`. Do not let the key-up time float from config (prekeying 30–120 s early
+  needlessly stress-tests the PA).
+- Sequence: set dial freq + USB mode **early**; at `anchor_ms − TX_SETUP_LEAD_MS` send
+  `UA1;TX0;` (key up); confirm you are **still before the anchor**; then start audio at the
+  target time. (Waiting *before* `TX0;` lets CAT/USB latency eat into the anchor — wait *after*.)
+- **First-audio-byte-write time ≠ RF audio onset** (USB host + CDC + ATmega buffering + synth add
+  latency). Add a calibrated `TX_AUDIO_ADVANCE_MS` measured from RF loopback (tune to drive
+  `wsprd` `DT`→0); start the first byte at `anchor − TX_AUDIO_ADVANCE_MS`.
+- Option to evaluate on a dummy load: stream **centered silence (0x80)** during the short
+  prekey window, then switch to WSPR samples at the anchor — keeps the audio/serial path alive
+  and makes timing sample-driven (SSB should emit little/no RF for DC-centered silence).
+- Define the **late threshold numerically** (start ~tens of ms; if the first byte cannot be
+  queued within it, abort the slot via `;RX;` — never partial-start a WSPR frame). Tune from
+  `wsprd` `DT`.
+- Keep `sent_samples`-driven pacing, the 100 ms drain + `;RX;`×3 key-off, and `0x3B→0x3A`
+  stuffing **outside** the pure `tx_synth`.
+
 **Verify (host first):** Plan 2 FT8 parity test still passes. **Then hardware:** RF loopback (below).
 
 ## Task 4 (HARDWARE): GPS freshness source + scheduler wiring
@@ -193,13 +209,18 @@ COMx flash`; plain Reset to boot). Pre-flight: truSDX **menu 8.3 reference calib
 
 ## Task 7 (HARDWARE): On-air verification (the real gates)
 
-1. **RF loopback:** truSDX → dummy load → RTL-SDR → `wsprd` decodes the live beacon. **Measure the
-   absolute carrier frequency and drift across the full 110.6 s frame.**
-2. **Serial-pacing soak:** ≥10 back-to-back transmissions into a dummy load; log underruns / write
-   stalls / actual wall-clock stream duration / bytes sent / key-off; confirm no carrier drop and
-   DTR-pulse recovery from a forced stuck-TX.
-3. **Thermal/power sanity** at the configured power and 20 % duty.
-4. **On-air:** real antenna → transmit → your spots appear on **wsprnet.org** with distance + SNR.
+1. **RF loopback:** truSDX → dummy load → RTL-SDR → `wsprd` decodes the live beacon. **Measure
+   absolute carrier frequency and drift across the full 110.6 s frame, and `wsprd` `DT`** (use it
+   to calibrate `TX_AUDIO_ADVANCE_MS` from Task 3 so `DT`→0).
+2. **Serial-pacing soak:** ≥10 back-to-back transmissions into a dummy load. Log, per slot:
+   timestamps before/after `UA1`, before/after `TX0`, first audio write, last audio write;
+   total bytes + stuffed-byte count; underruns / blocking-write stalls; actual wall-clock stream
+   duration vs the expected 110.592 s; key-off time; measured RF start offset; `wsprd` `DT`,
+   frequency error, and drift per frame. Confirm no carrier drop.
+3. **Forced abort/stall test:** trigger a cancel and a simulated stall mid-frame; prove the
+   `;RX;` cleanup runs and the DTR-pulse recovery revives a forced stuck-TX.
+4. **Thermal/power sanity** at the configured power and 20 % duty.
+5. **On-air:** real antenna → transmit → your spots appear on **wsprnet.org** with distance + SNR.
 
 ---
 

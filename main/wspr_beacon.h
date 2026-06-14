@@ -28,7 +28,10 @@ typedef struct {
 
 // Pure decision. HOLD (no fresh GPS / unencodable config / bad band), WAIT (countdown to
 // anchor), or TX (plan filled). prekey_lead_ms = how early before the anchor to report TX
-// so the device can pre-key and wait for the exact start. No hardware, no I/O.
+// so the device can pre-key and wait for the exact start; pass a small bounded positive
+// value (the device's fixed TX setup lead, e.g. ~1500 ms). A negative value yields a
+// permanent WAIT; a very large one keeps reporting TX for most of the inter-slot gap.
+// No hardware, no I/O.
 wspr_action_t wspr_beacon_decide(const wspr_cfg_t* cfg, const wspr_fix_src_t* src,
                                  const char* gps_grid4, int64_t now_mono_ms,
                                  int64_t max_age_ms, int64_t prekey_lead_ms,
