@@ -4,6 +4,15 @@
 *.wav
 build/
 
+# ESP-IDF
+/build/
+/managed_components/
+sdkconfig.old
+*.bin
+*.elf
+*.map
+*.log
+
 # Python
 __pycache__/
 *.pyc

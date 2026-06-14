@@ -1,0 +1,78 @@
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "esp_err.h"
+#include "ft8_audio_pipeline.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Preferred UAC audio format (QMX profile uses this strictly)
+#define UAC_SAMPLE_RATE     48000
+#define UAC_BIT_RESOLUTION  24
+#define UAC_CHANNELS        2
+
+// UAC buffer configuration
+#define UAC_BUFFER_SIZE     16000   // Ringbuffer size in bytes
+#define UAC_BUFFER_THRESHOLD 1000   // ~3.5ms at 48kHz stereo 24-bit
+
+// UAC streaming state
+typedef enum {
+    UAC_STATE_IDLE,         // Not initialized or stopped
+    UAC_STATE_WAITING,      // Waiting for device connection
+    UAC_STATE_CONNECTED,    // Device connected, ready to stream
+    UAC_STATE_STREAMING,    // Actively streaming audio
+    UAC_STATE_ERROR,        // Error state
+} uac_stream_state_t;
+
+// UAC profile controls how USB devices are selected/opened.
+typedef enum {
+    UAC_PROFILE_QMX = 0,         // Prefer known QMX CAT interface hints
+    UAC_PROFILE_GENERIC_USB = 1, // Generic USB audio + generic CDC scan
+} uac_stream_profile_t;
+
+#define UAC_WATERFALL_ROW_WIDTH FT8_AUDIO_WATERFALL_ROW_WIDTH
+
+// Get current UAC streaming state
+uac_stream_state_t uac_get_state(void);
+
+// Check if UAC streaming is active
+bool uac_is_streaming(void);
+
+// Start UAC streaming tasks (call when user presses 'H')
+// This starts USB host tasks and waits for device connection
+// Returns true on success, false on failure
+bool uac_start(void);
+bool uac_start_with_profile(uac_stream_profile_t profile);
+
+// Stop UAC streaming and cleanup
+// Call when exiting Host mode
+void uac_stop(void);
+
+// True once the USB host stack has enumerated either the QMX UAC mic
+// (audio source) or the QMX CDC-ACM endpoint (CAT). Useful for the
+// "no QMX in N seconds → fall back" timer in app_task_core0.
+bool uac_qmx_detected(void);
+
+// Get current device info as a status string
+// Returns pointer to static buffer, do not free
+const char* uac_get_status_string(void);
+
+// Get debug info about last USB sample (for on-screen display)
+// Returns pointer to static buffer, do not free
+const char* uac_get_debug_line1(void);
+const char* uac_get_debug_line2(void);
+
+// Copy the latest scaled waterfall row (240 bins) produced by UAC streaming.
+// Returns false when no valid row is available.
+bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len);
+
+// USB CDC-ACM (CAT control) helpers
+bool cat_cdc_ready(void);
+esp_err_t cat_cdc_send(const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+#ifdef __cplusplus
+}
+#endif
