@@ -115,7 +115,11 @@ static char s_debug_line2[64] = "";
 
 static TrusdxParser s_parser;
 
-static uint8_t s_tx_tones[TRUSDX_FT8_TONE_COUNT] = {};
+#define TRUSDX_TX_MAX_SYMBOLS 162
+static uint8_t s_tx_symbols[TRUSDX_TX_MAX_SYMBOLS] = {};
+static int s_tx_sym_count = TRUSDX_FT8_TONE_COUNT;
+static double s_tx_symbol_seconds = TRUSDX_FT8_TONE_SECONDS;
+static double s_tx_tone_spacing = 6.25;
 static int s_tx_base_hz = 1500;
 static int64_t s_tx_slot_start_ms = 0;
 static int64_t s_tx_start_ms = 0;
@@ -963,8 +967,8 @@ static void tx_task(void* arg)
     set_status("truSDX TX");
     s_tx_audio_streaming = true;
 
-    const double samples_per_tone = TRUSDX_FT8_TONE_SECONDS * (double)TRUSDX_TX_SAMPLE_RATE;
-    const int64_t total_samples = (int64_t)std::ceil(samples_per_tone * TRUSDX_FT8_TONE_COUNT);
+    const double samples_per_tone = s_tx_symbol_seconds * (double)TRUSDX_TX_SAMPLE_RATE;
+    const int64_t total_samples = (int64_t)std::ceil(samples_per_tone * s_tx_sym_count);
     int64_t sample_pos = ((s_tx_start_ms - s_tx_slot_start_ms) * TRUSDX_TX_SAMPLE_RATE) / 1000;
     if (sample_pos < 0) sample_pos = 0;
     if (sample_pos > total_samples) sample_pos = total_samples;
@@ -983,8 +987,8 @@ static void tx_task(void* arg)
         for (int i = 0; i < n; ++i) {
             int tone_idx = (int)std::floor((double)sample_pos / samples_per_tone);
             if (tone_idx < 0) tone_idx = 0;
-            if (tone_idx >= TRUSDX_FT8_TONE_COUNT) tone_idx = TRUSDX_FT8_TONE_COUNT - 1;
-            float tone_hz = (float)s_tx_base_hz + 6.25f * (float)s_tx_tones[tone_idx];
+            if (tone_idx >= s_tx_sym_count) tone_idx = s_tx_sym_count - 1;
+            float tone_hz = (float)s_tx_base_hz + (float)s_tx_tone_spacing * (float)s_tx_symbols[tone_idx];
             phase += TRUSDX_TWO_PI * (double)tone_hz / (double)TRUSDX_TX_SAMPLE_RATE;
             if (phase > TRUSDX_TWO_PI) {
                 phase = std::fmod(phase, TRUSDX_TWO_PI);
@@ -1074,7 +1078,10 @@ esp_err_t trusdx_serial_begin_ft8_tx(const uint8_t tones[79],
     if (!trusdx_serial_is_ready()) return ESP_ERR_INVALID_STATE;
     if (s_tune_on || s_tx_active || s_tx_task_handle) return ESP_ERR_INVALID_STATE;
 
-    std::memcpy(s_tx_tones, tones, TRUSDX_FT8_TONE_COUNT);
+    std::memcpy(s_tx_symbols, tones, TRUSDX_FT8_TONE_COUNT);
+    s_tx_sym_count = TRUSDX_FT8_TONE_COUNT;
+    s_tx_symbol_seconds = TRUSDX_FT8_TONE_SECONDS;
+    s_tx_tone_spacing = 6.25;
     s_tx_base_hz = base_hz;
     s_tx_slot_start_ms = slot_start_ms;
     s_tx_start_ms = now_ms;
@@ -1097,6 +1104,42 @@ esp_err_t trusdx_serial_begin_ft8_tx(const uint8_t tones[79],
         return ESP_ERR_NO_MEM;
     }
 
+    return ESP_OK;
+}
+
+esp_err_t trusdx_begin_tx_plan(const uint8_t* symbols, int count,
+                               double symbol_seconds, double tone_spacing_hz,
+                               int base_hz, int64_t anchor_ms, int64_t now_ms)
+{
+    if (!symbols || count <= 0 || count > TRUSDX_TX_MAX_SYMBOLS) return ESP_ERR_INVALID_ARG;
+    if (!trusdx_serial_is_ready()) return ESP_ERR_INVALID_STATE;
+    if (s_tune_on || s_tx_active || s_tx_task_handle) return ESP_ERR_INVALID_STATE;
+
+    std::memcpy(s_tx_symbols, symbols, (size_t)count);
+    s_tx_sym_count = count;
+    s_tx_symbol_seconds = symbol_seconds;
+    s_tx_tone_spacing = tone_spacing_hz;
+    s_tx_base_hz = base_hz;
+    s_tx_slot_start_ms = anchor_ms;
+    s_tx_start_ms = now_ms;
+    s_tx_done = false;
+    s_tx_failed = false;
+    s_tx_cancel_requested = false;
+    s_tx_waiting_for_marker = false;
+    s_tx_audio_streaming = false;
+    s_tx_marker_seen = false;
+    s_tx_active = true;
+
+    ESP_LOGI(TAG_TX, "wspr tx pending (%d sym)", count);
+    BaseType_t ret = xTaskCreatePinnedToCore(tx_task, "trusdx_tx",
+                                             4096, nullptr, 5,
+                                             &s_tx_task_handle, 1);
+    if (ret != pdPASS) {
+        s_tx_active = false;
+        s_tx_failed = true;
+        s_tx_task_handle = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 

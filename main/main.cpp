@@ -7631,7 +7631,11 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   }
 }
 
-extern "C" void app_main(void) {
+// FT8 app entry, retained for reference but no longer the firmware entry point.
+// Mini-WSPR's app_main lives in wspr_app.cpp; this FT8 path is unreferenced and is
+// dropped by the linker's --gc-sections. (Renamed, not deleted, to keep main.cpp's
+// symbols defined so the backend it shares still links.)
+extern "C" void app_main_ft8_unused(void) {
   // Run the main application loop on core0.
   xTaskCreatePinnedToCore(app_task_core0, "app_core0", APP_CORE0_STACK_BYTES, nullptr, 5, nullptr, 0);
 }

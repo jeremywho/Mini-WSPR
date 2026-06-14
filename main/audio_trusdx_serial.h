@@ -32,6 +32,12 @@ esp_err_t trusdx_serial_begin_ft8_tx(const uint8_t tones[79],
                                      int base_hz,
                                      int64_t slot_start_ms,
                                      int64_t now_ms);
+// Generalized symbol-stream TX (e.g. WSPR). symbols[0..count-1] are MFSK tone indices;
+// symbol_seconds + tone_spacing_hz define the modulation; base_hz is tone-0 audio;
+// anchor_ms is the intended start (the synth skips (now_ms-anchor_ms) into the frame).
+esp_err_t trusdx_begin_tx_plan(const uint8_t* symbols, int count,
+                               double symbol_seconds, double tone_spacing_hz,
+                               int base_hz, int64_t anchor_ms, int64_t now_ms);
 void trusdx_serial_cancel_ft8_tx(void);
 bool trusdx_serial_ft8_tx_active(void);
 bool trusdx_serial_ft8_tx_done(void);

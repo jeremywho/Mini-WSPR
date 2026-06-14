@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "main.cpp"
+         "wspr_app.cpp"
          "autoseq.cpp"
          "audio_source.cpp"
          "ble_native.cpp"
