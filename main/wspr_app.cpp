@@ -57,7 +57,7 @@ static void beacon_task(void*) {
     g_cfg.grid_override[0] = '\0';
     g_cfg.power_dbm = 33;            // ~2 W; honest power set on the rig
     g_cfg.band = "20m";
-    g_cfg.duty.period = 1;           // BENCH: TX every even minute (set 5 for ~20% on-air)
+    g_cfg.duty.period = 5;           // ~20% duty: 1 TX per 5 even minutes (~every 10 min), polite WSPR
     g_cfg.duty.phase = wspr_duty_phase_for_call(g_cfg.callsign, g_cfg.duty.period);
     g_cfg.base_hz_desired = 1500.0;
 
@@ -68,6 +68,9 @@ static void beacon_task(void*) {
     uint32_t tx_count = 0;
     int64_t  last_tx_anchor = -1;
     int64_t  tx_started_mono = 0;   // PA-safety watchdog: when the current TX keyed (0 = idle)
+    bool     auto_mode = false;     // false = manual (Enter fires one TX); true = continuous ~20%
+    bool     tx_armed = false;      // manual: a TX is armed for the next even-minute slot
+    char     last_key = 0;          // keyboard debounce
 
     // RMC-specific monotonic anchor: gps.time_utc only changes on a valid RMC, so a
     // change marks a fresh RMC. Stamp esp_timer then (same clock as now_mono) and keep
@@ -82,6 +85,20 @@ static void beacon_task(void*) {
         gps_tick();
         gps_state_t gs = gps_get_state();
         int64_t now_mono = esp_timer_get_time() / 1000;
+
+        // Keyboard control: Enter arms ONE transmit (next cycle); 'a' toggles continuous ~20% auto.
+        M5Cardputer.update();
+        M5Cardputer.Keyboard.updateKeysState();
+        auto &kb = M5Cardputer.Keyboard.keysState();
+        char key = kb.enter ? '\n' : (!kb.word.empty() ? kb.word.back() : 0);
+        if (key && key != last_key) {
+            if (key == '\n') tx_armed = true;
+            else if (key == 'a' || key == 'A') auto_mode = !auto_mode;
+        }
+        last_key = key;
+        // Manual uses every even minute as a candidate (the arm gates it); auto = polite 1-in-5.
+        g_cfg.duty.period = auto_mode ? 5 : 1;
+        g_cfg.duty.phase  = auto_mode ? wspr_duty_phase_for_call(g_cfg.callsign, 5) : 0;
 
         int64_t e = 0;
         if (gs.valid_fix && !gs.time_utc.empty() && gs.time_utc != last_rmc_time &&
@@ -104,11 +121,13 @@ static void beacon_task(void*) {
         // current UTC projected on the same monotonic clock the fix was stamped with.
         int64_t utc_now = (rmc_mono_ms != 0) ? rmc_epoch_ms + (now_mono - rmc_mono_ms) : 0;
 
-        if (act == WSPR_TX && plan.anchor_ms != last_tx_anchor && !trusdx_serial_ft8_tx_active()) {
+        if (act == WSPR_TX && (auto_mode || tx_armed) &&
+            plan.anchor_ms != last_tx_anchor && !trusdx_serial_ft8_tx_active()) {
             if (radio_control_sync_frequency_mode((int)plan.dial_hz) == ESP_OK &&
                 trusdx_begin_tx_plan(plan.symbols, 162, 8192.0 / 12000.0, 12000.0 / 8192.0,
                                      (int)plan.base_hz, plan.anchor_ms, utc_now) == ESP_OK) {
                 last_tx_anchor = plan.anchor_ms;   // latch: do not re-key this slot
+                tx_armed = false;                  // manual one-shot: disarm after firing
                 tx_count++;
             }
         }
@@ -134,10 +153,12 @@ static void beacon_task(void*) {
         std::snprintf(tmp, sizeof tmp, "%s rig:%s TX:%u", g_cfg.band,
                       trusdx_serial_is_ready() ? "OK" : "..", (unsigned)tx_count);
         std::snprintf(l2, sizeof l2, "%-18s", tmp);
-        if (act == WSPR_HOLD)      std::snprintf(tmp, sizeof tmp, "waiting GPS");
-        else if (act == WSPR_WAIT) std::snprintf(tmp, sizeof tmp, "next TX %lds",
-                                                 (long)((plan.anchor_ms - utc_now) / 1000));
-        else                       std::snprintf(tmp, sizeof tmp, "** TX **");
+        long secs = (long)((plan.anchor_ms - utc_now) / 1000);
+        if (trusdx_serial_ft8_tx_active()) std::snprintf(tmp, sizeof tmp, "** TX **");
+        else if (act == WSPR_HOLD)         std::snprintf(tmp, sizeof tmp, "waiting GPS");
+        else if (tx_armed)                 std::snprintf(tmp, sizeof tmp, "ARMED %lds", secs);
+        else if (auto_mode)                std::snprintf(tmp, sizeof tmp, "AUTO %lds", secs);
+        else                               std::snprintf(tmp, sizeof tmp, "Enter=TX a=auto");
         std::snprintf(l3, sizeof l3, "%-18s", tmp);
 
         static char p1[24] = {0}, p2[24] = {0}, p3[24] = {0};
