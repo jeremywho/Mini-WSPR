@@ -46,9 +46,12 @@ static void connect_task(void*) {
 // Bail back to the launcher (factory app). No-op when flashed standalone (no factory
 // partition) — the same binary works both inside the launcher and on its own.
 static void return_to_launcher() {
-    const esp_partition_t* f = esp_partition_find_first(
+    // Only meaningful inside the launcher suite: we're in an OTA slot and the launcher is
+    // the factory app. Flashed standalone we ARE the factory app, so this is a no-op.
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    const esp_partition_t* fac = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
-    if (f && esp_ota_set_boot_partition(f) == ESP_OK) esp_restart();
+    if (fac && run != fac && esp_ota_set_boot_partition(fac) == ESP_OK) esp_restart();
 }
 
 static void beacon_task(void*) {
