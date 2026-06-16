@@ -22,7 +22,7 @@ idf_component_register(
          "wspr_band.c"
          "wspr_beacon.c"
     INCLUDE_DIRS "."
-    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm ch340_usb_serial fatfs sdmmc spiffs bt nvs_flash efuse json
+    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm ch340_usb_serial fatfs sdmmc spiffs bt nvs_flash efuse json app_update esp_partition
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
 # NOTE: the POST_BUILD DRAM budget check lives in the top-level CMakeLists.txt,

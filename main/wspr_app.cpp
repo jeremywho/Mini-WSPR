@@ -14,6 +14,10 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_system.h"
+#include "driver/gpio.h"
 #include "M5Cardputer.h"
 
 #include "gps.h"               // C++ header (std::string in gps_state_t)
@@ -39,10 +43,20 @@ static void connect_task(void*) {
     }
 }
 
+// Bail back to the launcher (factory app). No-op when flashed standalone (no factory
+// partition) — the same binary works both inside the launcher and on its own.
+static void return_to_launcher() {
+    const esp_partition_t* f = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
+    if (f && esp_ota_set_boot_partition(f) == ESP_OK) esp_restart();
+}
+
 static void beacon_task(void*) {
     auto m5cfg = M5.config();
     M5Cardputer.begin(m5cfg);
     M5.Display.setRotation(1);
+    gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);   // G0/BOOT = launcher-return button
+    gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
     M5.Display.fillScreen(TFT_BLACK);
     M5.Display.setTextSize(2);
     M5.Display.setCursor(0, 0);
@@ -86,8 +100,10 @@ static void beacon_task(void*) {
         gps_state_t gs = gps_get_state();
         int64_t now_mono = esp_timer_get_time() / 1000;
 
+        // G0/BOOT pin (GPIO0, low = pressed) bails back to the launcher.
         // Keyboard control: Enter arms ONE transmit (next cycle); 'a' toggles continuous ~20% auto.
         M5Cardputer.update();
+        if (gpio_get_level(GPIO_NUM_0) == 0) return_to_launcher();
         M5Cardputer.Keyboard.updateKeysState();
         auto &kb = M5Cardputer.Keyboard.keysState();
         char key = kb.enter ? '\n' : (!kb.word.empty() ? kb.word.back() : 0);
