@@ -50,6 +50,12 @@ internals, timing tolerances, and design rationale are documented in
 and the plans alongside it — **read those before changing the synth or TX timing**, the
 audio path has non-obvious sharing with the FT8 backend.
 
+**TX synth lives inline in `audio_trusdx_serial.cpp` (`tx_task`)** — a continuous-phase MFSK NCO
+(11520 Hz, 8-bit PCM, `0x3B→0x3A` CAT-stuffing), parameterized by `trusdx_begin_tx_plan`. Two
+look-alike files are **not** the device path: `ft8_tx_synth.cpp` (uncompiled, dead) and `tx_synth.c`
+(compiled but host-test-only — it validates the encoder against `wsprd`, it does not drive TX).
+Full module map + dev workflow: **[CLAUDE.md](CLAUDE.md)**.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
