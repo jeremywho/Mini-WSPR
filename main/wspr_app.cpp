@@ -26,6 +26,7 @@
 #include "wspr_beacon.h"
 #include "wspr_sched.h"
 #include "wspr_time.h"
+#include "board_power.h"       // Cardputer ADV battery via ADC (M5.Power can't read it on S3)
 
 static const char* TAG = "wspr_app";
 
@@ -66,6 +67,7 @@ static void beacon_task(void*) {
     M5.Display.print("Mini-WSPR");
 
     nvs_flash_init();
+    board_power_init();        // Cardputer ADV battery ADC (GPIO10)
     gps_start(115200);
 
     xTaskCreatePinnedToCore(connect_task, "wspr_connect", 4096, nullptr, 4, nullptr, 0);
@@ -173,7 +175,12 @@ static void beacon_task(void*) {
                       trusdx_serial_is_ready() ? "OK" : "..", (unsigned)tx_count);
         std::snprintf(l2, sizeof l2, "%-18s", tmp);
         long secs = (long)((plan.anchor_ms - utc_now) / 1000);
-        if (trusdx_serial_ft8_tx_active()) std::snprintf(tmp, sizeof tmp, "** TX **");
+        if (trusdx_serial_ft8_tx_active()) {
+            // 162 symbols * 8192/12000 s = 110.6 s frame; count the seconds left to key-off.
+            long tx_left = (110592 - (now_mono - tx_started_mono)) / 1000;
+            if (tx_left < 0) tx_left = 0;
+            std::snprintf(tmp, sizeof tmp, "** TX %lds **", tx_left);
+        }
         else if (act == WSPR_HOLD)         std::snprintf(tmp, sizeof tmp, "waiting GPS");
         else if (tx_armed)                 std::snprintf(tmp, sizeof tmp, "ARMED %lds", secs);
         else if (auto_mode)                std::snprintf(tmp, sizeof tmp, "AUTO %lds", secs);
@@ -187,6 +194,29 @@ static void beacon_task(void*) {
             M5.Display.setCursor(0, 62); M5.Display.print(l2);
             M5.Display.setCursor(0, 84); M5.Display.print(l3);
             std::strcpy(p1, l1); std::strcpy(p2, l2); std::strcpy(p3, l3);
+        }
+
+        // Battery %, top-right, color-coded (red <=20%, yellow <=50%). A low battery sags the
+        // Cardputer's USB-host rail and drops the truSDX link, so this is the "charge me" cue.
+        static int bat_div = 100;
+        if (++bat_div >= 10) {                          // refresh ~every 2 s (and immediately at boot)
+            bat_div = 0;
+            board_power_status_t ps;
+            if (board_power_read(&ps) == ESP_OK && ps.valid) {
+                char bs[10];
+                std::snprintf(bs, sizeof bs, "%s%d%%", ps.charging ? "+" : "", ps.percent);
+                static char pbat[10] = {0};
+                if (std::strcmp(bs, pbat) != 0) {
+                    uint16_t bc = ps.percent <= 20 ? TFT_RED
+                                : ps.percent <= 50 ? TFT_YELLOW : TFT_GREEN;
+                    M5.Display.setTextSize(2);
+                    M5.Display.fillRect(150, 0, 90, 16, TFT_BLACK);
+                    M5.Display.setTextColor(bc, TFT_BLACK);
+                    M5.Display.setCursor(240 - M5.Display.textWidth(bs), 0);
+                    M5.Display.print(bs);
+                    std::strcpy(pbat, bs);
+                }
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(200));
